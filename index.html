@@ -1,0 +1,277 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>双足短跑大赛 · MuJoCo WASM + 多物种 ONNX 策略</title>
+<style>
+  :root {
+    --bg: #0a0f14;
+    --panel: rgba(10, 14, 20, 0.86);
+    --line: #1d2836;
+    --line-bright: #31405a;
+    --text: #d5dde8;
+    --dim: #71808f;
+    --amber: #ffb000;
+    --red: #ff4545;
+    --green: #38d97a;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { height: 100%; overflow: hidden; }
+  body {
+    background: var(--bg); color: var(--text);
+    font-family: "PingFang SC", "Microsoft YaHei", ui-monospace, Menlo, Consolas, monospace;
+    font-size: 13px; -webkit-font-smoothing: antialiased;
+  }
+  #view { position: fixed; inset: 0; touch-action: none; }
+  #view canvas { display: block; }
+
+  .panel {
+    position: fixed; background: var(--panel);
+    border: 1px solid var(--line); backdrop-filter: blur(8px); z-index: 5;
+    border-radius: 10px;
+  }
+
+  #hdr { top: 14px; left: 14px; padding: 10px 16px 9px; }
+  #hdr h1 { font-size: 16px; font-weight: 700; letter-spacing: 0.12em; color: #eef2f8; }
+  #hdr .sub { margin-top: 4px; font-size: 10px; letter-spacing: 0.06em; color: var(--dim); }
+
+  #statusbar { top: 14px; right: 14px; padding: 9px 14px; display: flex; align-items: center; gap: 12px; }
+  .pill { font-size: 12px; letter-spacing: 0.1em; padding: 3px 12px; border: 1px solid var(--line-bright); border-radius: 999px; }
+  .pill.ok { color: var(--green); border-color: var(--green); }
+  .pill.warn { color: var(--amber); border-color: var(--amber); }
+  .pill.bad { color: var(--red); border-color: var(--red); }
+  #clock { font-size: 20px; font-weight: 700; color: #eef2f8; font-variant-numeric: tabular-nums; }
+  #rt { font-size: 10px; color: var(--dim); }
+
+  #rec { display: none; align-items: center; gap: 6px; font-size: 11px; color: var(--red);
+         letter-spacing: 0.12em; font-variant-numeric: tabular-nums; }
+  #rec.show { display: flex; }
+  #rec i { width: 9px; height: 9px; border-radius: 50%; background: var(--red); animation: recblink 1.1s infinite; }
+  #rec b { font-weight: 700; color: #ff7b7b; }
+  @keyframes recblink { 50% { opacity: 0.2; } }
+
+  #board { top: 84px; right: 14px; width: 300px; padding: 12px 14px; }
+  #board h2 { font-size: 10px; letter-spacing: 0.24em; color: var(--dim); font-weight: 400; margin-bottom: 10px; }
+  .row { display: grid; grid-template-columns: 12px minmax(44px, auto) 1fr auto; gap: 8px; align-items: center;
+         padding: 5px 0; border-top: 1px solid var(--line); font-size: 12px; }
+  .row:first-child { border-top: none; }
+  .row.done { background: rgba(56, 217, 122, 0.06); }
+  .dot { width: 11px; height: 11px; border-radius: 50%; display: inline-block; }
+  .nm { color: var(--text); white-space: nowrap; }
+  .bar { height: 5px; background: var(--line); border-radius: 3px; overflow: hidden; }
+  .bar i { display: block; height: 100%; background: linear-gradient(90deg, #ffb000, #ff6a00); border-radius: 3px; }
+  .st { color: var(--dim); font-variant-numeric: tabular-nums; min-width: 96px; text-align: right; }
+  .row.done .st { color: var(--green); }
+
+  #ctrl { left: 50%; transform: translateX(-50%); bottom: 14px; display: flex; padding: 4px; gap: 2px;
+          max-width: calc(100vw - 28px); overflow-x: auto; }
+  .cell { padding: 8px 14px; border-right: 1px solid var(--line); display: flex; flex-direction: column; gap: 6px; }
+  .cell:last-child { border-right: none; }
+  .cell .lbl { font-size: 9px; letter-spacing: 0.2em; color: var(--dim); white-space: nowrap; }
+  .cell .v { font-size: 11px; color: var(--text); white-space: nowrap; }
+  button {
+    font: inherit; color: var(--text); background: transparent;
+    border: 1px solid var(--line-bright); padding: 5px 13px; cursor: pointer;
+    letter-spacing: 0.08em; font-size: 11px; white-space: nowrap; border-radius: 7px;
+  }
+  button:hover { border-color: var(--amber); color: var(--amber); }
+  button.active { border-color: var(--amber); color: var(--amber); background: rgba(255, 176, 0, 0.08); }
+  button.primary { background: var(--amber); color: #14100a; border-color: var(--amber); font-weight: 700; }
+  button.primary:hover { filter: brightness(1.1); color: #14100a; }
+  #btn-rec.rec { border-color: var(--red); color: var(--red); background: rgba(255, 69, 69, 0.10); }
+  #btn-rec.rec:hover { border-color: var(--red); color: var(--red); }
+  #rec-opt { display: flex; align-items: center; gap: 8px; }
+  #rec-opt label { display: inline-flex; align-items: center; gap: 4px; font-size: 11px;
+                   color: var(--dim); cursor: pointer; white-space: nowrap; user-select: none; }
+  #rec-opt input { accent-color: var(--amber); margin: 0; cursor: pointer; }
+
+  #rec-toast { position: fixed; top: 58px; left: 50%; transform: translate(-50%, -6px);
+    background: var(--panel); border: 1px solid var(--line-bright); color: var(--text);
+    padding: 8px 16px; border-radius: 8px; font-size: 12px; z-index: 40; opacity: 0;
+    transition: opacity 0.25s, transform 0.25s; pointer-events: none; max-width: 72vw;
+    backdrop-filter: blur(8px); }
+  #rec-toast.show { opacity: 1; transform: translate(-50%, 0); }
+  #rec-toast.err { border-color: var(--red); color: var(--red); }
+  .seg { display: flex; gap: 5px; }
+  input[type="range"] { -webkit-appearance: none; appearance: none; width: 120px; height: 3px;
+    background: var(--line-bright); outline: none; border-radius: 2px; cursor: pointer; }
+  input[type="range"]::-webkit-slider-thumb { -webkit-appearance: none; appearance: none;
+    width: 12px; height: 16px; background: var(--amber); border-radius: 3px; cursor: pointer; }
+
+  #countdown {
+    position: fixed; top: 30%; left: 50%; transform: translate(-50%, -50%);
+    font-size: 110px; font-weight: 900; color: var(--amber); z-index: 8;
+    text-shadow: 0 6px 30px rgba(255, 176, 0, 0.4); display: none;
+    font-variant-numeric: tabular-nums;
+  }
+
+  #hint { position: fixed; bottom: 16px; left: 16px; font-size: 11px; color: var(--dim);
+          letter-spacing: 0.04em; line-height: 1.8; z-index: 4; }
+  #hint b { color: var(--text); font-weight: 400; }
+
+  /* 结算面板 */
+  #results {
+    position: fixed; inset: 0; background: rgba(5, 8, 12, 0.6); z-index: 20;
+    display: flex; align-items: center; justify-content: center; visibility: hidden; opacity: 0;
+    transition: opacity 0.3s;
+  }
+  #results.show { visibility: visible; opacity: 1; }
+  #results .card {
+    background: #10161f; border: 1px solid var(--line-bright); border-radius: 16px;
+    padding: 26px 30px; min-width: 420px;
+  }
+  #results h2 { color: #eef2f8; letter-spacing: 0.1em; margin-bottom: 16px; font-size: 20px; }
+  #results table { width: 100%; border-collapse: collapse; }
+  #results td { padding: 8px 10px; border-top: 1px solid var(--line); font-size: 13px; }
+  #results td:first-child { font-size: 16px; width: 52px; }
+  #results .dot { margin-right: 8px; vertical-align: -1px; }
+  #results .btns { margin-top: 18px; display: flex; gap: 10px; justify-content: flex-end; }
+
+  /* 启动遮罩 */
+  #boot { position: fixed; inset: 0; background: var(--bg); z-index: 50;
+    display: flex; align-items: center; justify-content: center; transition: opacity 0.6s; }
+  #boot.hidden { opacity: 0; pointer-events: none; }
+  #boot .inner { width: min(600px, 88vw); }
+  #boot h1 { font-size: 26px; letter-spacing: 0.16em; color: #eef2f8; }
+  #boot .tag { margin-top: 6px; font-size: 11px; letter-spacing: 0.2em; color: var(--dim); }
+  #bootbar { width: 100%; height: 4px; margin: 18px 0; appearance: none; }
+  #bootbar::-webkit-progress-bar { background: var(--line); border-radius: 2px; }
+  #bootbar::-webkit-progress-value { background: var(--amber); border-radius: 2px; }
+  #bootlog { border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px;
+    height: 180px; overflow-y: auto; font-size: 12px; line-height: 1.9; color: var(--text); }
+  #bootlog .err { color: var(--red); }
+
+  @media (max-width: 900px) { #board { display: none; } #hint { display: none; } }
+</style>
+<script>
+  // 诊断: 收集页面错误供自动化测试检查
+  window.__errs = [];
+  window.addEventListener('error', (e) => window.__errs.push(String(e.message || e.error)));
+  window.addEventListener('unhandledrejection', (e) => window.__errs.push('rejection: ' + String(e.reason && e.reason.message || e.reason)));
+</script>
+<script src="./vendor/ort/ort.min.js"></script>
+<script type="importmap">
+{
+  "imports": {
+    "three": "./vendor/three/three.module.js",
+    "three/addons/": "./vendor/three/"
+  }
+}
+</script>
+</head>
+<body>
+<div id="view"></div>
+
+<div id="hdr" class="panel">
+  <h1>🏃 双足短跑大赛</h1>
+  <div class="sub">6 物种官方模型+官方策略 · MUJOCO 3.14 WASM</div>
+</div>
+
+<div id="statusbar" class="panel">
+  <div style="text-align:right">
+    <span id="status" class="pill warn">加载中</span>
+    <div id="rt" style="margin-top:3px">RTF -</div>
+  </div>
+  <span id="rec" data-norec><i></i>REC <b id="rec-t">00:00</b></span>
+  <span id="clock">00.0s</span>
+</div>
+
+<div id="board" class="panel">
+  <h2>实时排名</h2>
+  <div id="lb"></div>
+</div>
+
+<div id="countdown"></div>
+
+<div id="ctrl" class="panel">
+  <div class="cell">
+    <span class="lbl">比赛</span>
+    <div class="seg">
+      <button id="btn-start" class="primary">▶ 开始比赛</button>
+      <button id="btn-pause">暂停</button>
+    </div>
+  </div>
+  <div class="cell">
+    <span class="lbl">机器人数</span>
+    <div class="seg" id="count-seg">
+      <button data-n="2">2</button>
+      <button data-n="3">3</button>
+      <button data-n="4">4</button>
+      <button data-n="5">5</button>
+      <button data-n="6" class="active">6</button>
+    </div>
+  </div>
+  <div class="cell">
+    <span class="lbl">阵容</span>
+    <div class="seg" id="lineup-seg">
+      <button data-v="mixed" class="active">六强混战</button>
+      <button data-v="g1">全 G1</button>
+      <button data-v="random">随机</button>
+    </div>
+  </div>
+  <div class="cell">
+    <span class="lbl">目标速度</span>
+    <input type="range" id="spd" min="0.3" max="1.55" step="0.05" value="1.55">
+    <span class="v" id="spd-val">1.55 m/s</span>
+  </div>
+  <div class="cell">
+    <span class="lbl">仿真倍速</span>
+    <div class="seg" id="speed-seg">
+      <button data-v="0.5">0.5×</button>
+      <button data-v="1" class="active">1×</button>
+      <button data-v="2">2×</button>
+      <button data-v="3">3×</button>
+      <button data-v="4">4×</button>
+    </div>
+  </div>
+  <div class="cell">
+    <span class="lbl">视角</span>
+    <div class="seg" id="cam-seg">
+      <button data-m="leader">跟随领跑</button>
+      <button data-m="over" class="active">全景</button>
+      <button data-m="free">自由</button>
+    </div>
+  </div>
+  <div class="cell">
+    <span class="lbl">录制</span>
+    <div id="rec-opt">
+      <button id="btn-rec">● 录制 MP4</button>
+      <label data-norec title="勾选后标题栏/排名板/控制条等面板合成进视频, 取消则只录 3D 画面">
+        <input type="checkbox" id="rec-panels" checked>面板
+      </label>
+    </div>
+  </div>
+</div>
+
+<div id="hint">
+  <b>25m</b> 跑道 · 每次摔倒罚时 <b>2s</b> · 空格键重新发枪<br>
+  <b>R</b> 键开始/停止录制(停止自动下载; 控制条可勾选是否含面板) · 「自由」视角下可拖拽旋转 / 滚轮缩放
+</div>
+
+<div id="results">
+  <div class="card">
+    <h2>🏁 比赛结果</h2>
+    <table>
+      <thead><tr><td>名次</td><td>选手</td><td>用时(含罚时)</td><td>均速 m/s</td><td>摔倒</td></tr></thead>
+      <tbody id="res-rows"></tbody>
+    </table>
+    <div class="btns">
+      <button id="res-close">关闭</button>
+      <button id="btn-again" class="primary">再来一局</button>
+    </div>
+  </div>
+</div>
+
+<div id="boot">
+  <div class="inner">
+    <h1>🏃 双足短跑大赛</h1>
+    <div class="tag">MUJOCO WASM 物理 · 官方模型+官方策略 · 纯浏览器本地运行</div>
+    <progress id="bootbar" value="0" max="100"></progress>
+    <div id="bootlog"></div>
+  </div>
+</div>
+
+<script type="module" src="./src/main.js"></script>
+</body>
+</html>
