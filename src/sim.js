@@ -62,82 +62,105 @@ function inlineMjcfIncludes(xml, files, baseDir = '', depth = 0) {
 // 让 bootlog 真正刷出进度, 避免页面冻结在上一条旧日志上造成"卡死"错觉。
 const breathe = () => new Promise((r) => setTimeout(r, 0));
 
-export class Sim {
-  // assets: { g1: {xml, meshes:Map}, species: [{id, xml, meshes:Map}] }
-  static async load(mujocoMod, assets, log) {
-    const sim = new Sim();
-    sim.mj = mujocoMod;
-
-    const vfs = new mujocoMod.MjVFS();
-    sim.vfs = vfs;
-
-    // 逐文件注入: 每个文件之间让出一拍(单个 8.9MB 大文件的拷贝也要 2-3s,
-    // 不让出就会连续冻结十几秒), 每累计 ~10MB 刷一条进度日志。
-    async function inject(prefix, meshes, label) {
-      let done = 0, mb = 0, loggedMb = 0;
-      const total = meshes.size;
-      for (const [name, bytes] of meshes) {
-        vfs.addBuffer(prefix + name, bytes);
-        done++; mb += bytes.length;
-        if (done === total || mb - loggedMb >= 10 * 1048576) {
-          log(`${label} ${done}/${total}(${(mb / 1048576) | 0}MB) ...`);
-          await breathe();
-          loggedMb = mb;
-        } else {
-          await breathe();
-        }
-      }
+// 逐文件注入网格到 VFS: 每个文件之间让出一拍(单个 8.9MB 大文件的拷贝也要 2-3s,
+// 不让出就会连续冻结十几秒), 每累计 ~10MB 刷一条进度日志。
+async function injectMeshes(vfs, prefix, meshes, label, log) {
+  let done = 0, mb = 0, loggedMb = 0;
+  const total = meshes.size;
+  for (const [name, bytes] of meshes) {
+    vfs.addBuffer(prefix + name, bytes);
+    done++; mb += bytes.length;
+    if (done === total || mb - loggedMb >= 10 * 1048576) {
+      log(`${label} ${done}/${total}(${(mb / 1048576) | 0}MB) ...`);
+      await breathe();
+      loggedMb = mb;
+    } else {
+      await breathe();
     }
+  }
+}
 
-    log('注入 G1 MJCF 与网格 ...');
-    vfs.addBuffer('g1_29dof.xml', new TextEncoder().encode(assets.g1.xml));
-    await inject('meshes/', assets.g1.meshes, '注入 G1 网格');
-    log('编译 G1 模型(29 DoF + 36 网格), 请稍候 ...');
-    await breathe();
-    sim.model = mujocoMod.MjModel.from_xml_string(buildSceneXml(), vfs);
-    if (!sim.model) throw new Error('G1 MjModel 编译失败');
-    sim.nq = sim.model.nq; sim.nu = sim.model.nu; sim.nv = sim.model.nv;
-    log(`G1 就绪: nq=${sim.nq} nv=${sim.nv} nu=${sim.nu}`);
-    await breathe();
-
-    // 各物种官方 MJCF(自带场景)直接编译
-    sim.speciesModels = new Map();
-    for (const sp of SPECIES) {
+export class Sim {
+  // assets: { g1: {xml, meshes:Map}, species: Map<id, {xml, extraFiles?, meshes}> }
+  // speciesList: 要编译的物种(默认全部 SPECIES); 选择屏按需加载/换阵容时传子集。
+  // 不传第 4 参时对外行为与旧版逐字节一致(无头回归测试的默认全量路径)。
+  static async load(mujocoMod, assets, log, speciesList = SPECIES) {
+    const sim = Sim.empty(mujocoMod);
+    // G1 编译序言: 仅当子集含 g1 且资产在场才编译(子集可不含 G1)
+    const g1sp = speciesList.find((sp) => sp.id === 'g1');
+    if (g1sp && assets.g1) await Sim.compileSpecies(sim, g1sp, assets.g1, log);
+    for (const sp of speciesList) {
       if (sp.id === 'g1') continue;
       const a = assets.species.get(sp.id);
-      if (!a) continue;
-      let xml = a.xml;
-      if (a.extraFiles && a.extraFiles.size > 0) xml = inlineMjcfIncludes(xml, a.extraFiles);
-      for (const p of sp.xmlPatches ?? []) xml = xml.split(p.from).join(p.to);
-      xml = insertFences(xml);
-      const key = sp.id + '_model.xml';
-      vfs.addBuffer(key, new TextEncoder().encode(xml));
-      // 网格 VFS 键按物种加前缀: 不同厂商的网格文件可能重名(如 pelvis.STL)
-      await inject(sp.id + '_meshes/', a.meshes, `注入 ${sp.name} 网格`);
-      log(`编译 ${sp.name} 模型, 请稍候 ...`);
-      await breathe();
-      try {
-        const m = mujocoMod.MjModel.from_xml_string(xml, vfs);
-        m.opt.timestep = sp.dt; // 与官方部署一致(如 sim2sim 覆盖 timestep)
-        sim.speciesModels.set(sp.id, m);
-        log(`${sp.name} 模型就绪: nq=${m.nq} nu=${m.nu} dt=${sp.dt}`);
-      } catch (e) {
-        log(`${sp.name} 模型编译失败: ${String(e.message).slice(0, 120)}`, 'err');
-      }
-      await breathe();
+      if (!a) continue; // 资产不在场则跳过(既有行为)
+      await Sim.compileSpecies(sim, sp, a, log);
     }
     return sim;
+  }
+
+  // 空实例: 只装 WASM 绑定与 VFS, 不编译任何物种。物种模型经 compileSpecies
+  // 逐个增量编入(选择屏按需加载/赛后换阵容补编新物种走这条路)。
+  static empty(mujocoMod) {
+    const sim = new Sim();
+    sim.mj = mujocoMod;
+    sim.vfs = new mujocoMod.MjVFS();
+    sim.speciesModels = new Map();
+    return sim;
+  }
+
+  // 编译单个物种并入表: extraFiles 内联 + xmlPatches 替换 + 护栏注入 + VFS 注入网格
+  // + from_xml_string 编译 + 设 timestep。entry 为该物种资产 { xml, extraFiles?, meshes }。
+  // g1 是特例: 机器人 MJCF 需 buildSceneXml() 包装成比赛场景, 编译结果存 sim.model
+  // (其余物种存 sim.speciesModels)。非 g1 编译失败只记 err 日志(调用方据 hasModel 剔除),
+  // g1 失败直接 throw(它还是 fallback 模型, 静默缺失危害更大)。
+  static async compileSpecies(sim, sp, entry, log) {
+    const vfs = sim.vfs;
+    if (sp.id === 'g1') {
+      log('注入 G1 MJCF 与网格 ...');
+      vfs.addBuffer('g1_29dof.xml', new TextEncoder().encode(entry.xml));
+      await injectMeshes(vfs, 'meshes/', entry.meshes, '注入 G1 网格', log);
+      log('编译 G1 模型(29 DoF + 36 网格), 请稍候 ...');
+      await breathe();
+      sim.model = sim.mj.MjModel.from_xml_string(buildSceneXml(), vfs);
+      if (!sim.model) throw new Error('G1 MjModel 编译失败');
+      sim.nq = sim.model.nq; sim.nu = sim.model.nu; sim.nv = sim.model.nv;
+      log(`G1 就绪: nq=${sim.nq} nv=${sim.nv} nu=${sim.nu}`);
+      await breathe();
+      return;
+    }
+    let xml = entry.xml;
+    if (entry.extraFiles && entry.extraFiles.size > 0) xml = inlineMjcfIncludes(xml, entry.extraFiles);
+    for (const p of sp.xmlPatches ?? []) xml = xml.split(p.from).join(p.to);
+    xml = insertFences(xml);
+    const key = sp.id + '_model.xml';
+    vfs.addBuffer(key, new TextEncoder().encode(xml));
+    // 网格 VFS 键按物种加前缀: 不同厂商的网格文件可能重名(如 pelvis.STL)
+    await injectMeshes(vfs, sp.id + '_meshes/', entry.meshes, `注入 ${sp.name} 网格`, log);
+    log(`编译 ${sp.name} 模型, 请稍候 ...`);
+    await breathe();
+    try {
+      const m = sim.mj.MjModel.from_xml_string(xml, vfs);
+      m.opt.timestep = sp.dt; // 与官方部署一致(如 sim2sim 覆盖 timestep)
+      sim.speciesModels.set(sp.id, m);
+      log(`${sp.name} 模型就绪: nq=${m.nq} nu=${m.nu} dt=${sp.dt}`);
+    } catch (e) {
+      log(`${sp.name} 模型编译失败: ${String(e.message).slice(0, 120)}`, 'err');
+    }
+    await breathe();
   }
 
   // 物种模型编译失败(如 WASM 内存耗尽)时绝不能静默回退成 G1 模型——
   // 那会让该物种拿着自己的契约驱动 G1 的执行器, 行为完全失控(踩过)。
   hasModel(id) {
-    if (id === 'g1') return true;
+    if (id === 'g1') return !!this.model;
     return this.speciesModels.has(id);
   }
 
   modelFor(species) {
-    if (!species || species.id === 'g1') return this.model;
+    if (!species || species.id === 'g1') {
+      if (!this.model) throw new Error('G1 的 MjModel 未编译(当前阵容不含 G1 或编译失败)');
+      return this.model;
+    }
     const m = this.speciesModels.get(species.id);
     if (!m) throw new Error(`物种 ${species.id} 的 MjModel 未编译成功(见 Sim.load 日志)`);
     return m;

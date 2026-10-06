@@ -128,6 +128,42 @@
   #results .dot { margin-right: 8px; vertical-align: -1px; }
   #results .btns { margin-top: 18px; display: flex; gap: 10px; justify-content: flex-end; }
 
+  /* 物种选择屏(z-index 30: 盖过比赛 UI 与结算面板, 被 #boot 加载遮罩盖住) */
+  #select {
+    position: fixed; inset: 0; background: rgba(5, 8, 12, 0.6); z-index: 30;
+    display: flex; align-items: center; justify-content: center; visibility: hidden; opacity: 0;
+    transition: opacity 0.3s;
+  }
+  #select.show { visibility: visible; opacity: 1; }
+  #select .card {
+    background: #10161f; border: 1px solid var(--line-bright); border-radius: 16px;
+    padding: 26px 30px; width: min(720px, 92vw); max-height: 88vh; overflow-y: auto;
+  }
+  #select h2 { color: #eef2f8; letter-spacing: 0.1em; margin-bottom: 4px; font-size: 20px; }
+  #sel-count { font-size: 11px; color: var(--dim); margin-bottom: 14px; letter-spacing: 0.05em; }
+  #sel-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-bottom: 16px; }
+  .sel-card {
+    display: flex; flex-direction: column; gap: 5px; text-align: left;
+    border: 1px solid var(--line-bright); border-radius: 10px; padding: 11px 13px;
+    cursor: pointer; user-select: none; background: transparent; color: var(--text);
+  }
+  .sel-card:hover { border-color: var(--amber); }
+  .sel-card.active { border-color: var(--amber); background: rgba(255, 176, 0, 0.08); }
+  .sel-card .sel-head { display: flex; align-items: center; gap: 7px; font-size: 13px; }
+  .sel-card .emoji { font-size: 19px; }
+  .sel-card .nm { color: #eef2f8; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .sel-card input { accent-color: var(--amber); margin: 0 0 0 auto; cursor: pointer; flex: none; }
+  .sel-card .blurb { font-size: 11px; line-height: 1.5; color: var(--text); }
+  .sel-card .size { font-size: 10px; color: var(--dim); }
+  #sel-foot { display: flex; gap: 10px; align-items: center; justify-content: flex-end; }
+  #sel-foot .spacer { margin-right: auto; font-size: 10px; color: var(--dim); }
+  #sel-start:disabled { opacity: 0.45; cursor: not-allowed; }
+  #sel-start:disabled:hover { filter: none; color: #14100a; border-color: var(--amber); }
+
+  /* 选择屏显示期间隐藏比赛 UI(#hdr 保留为常驻品牌位) */
+  body.mode-select #statusbar, body.mode-select #board,
+  body.mode-select #ctrl, body.mode-select #hint, body.mode-select #countdown { display: none; }
+
   /* 启动遮罩 */
   #boot { position: fixed; inset: 0; background: var(--bg); z-index: 50;
     display: flex; align-items: center; justify-content: center; transition: opacity 0.6s; }
@@ -142,7 +178,7 @@
     height: 180px; overflow-y: auto; font-size: 12px; line-height: 1.9; color: var(--text); }
   #bootlog .err { color: var(--red); }
 
-  @media (max-width: 900px) { #board { display: none; } #hint { display: none; } }
+  @media (max-width: 900px) { #board { display: none; } #hint { display: none; } #sel-grid { grid-template-columns: repeat(2, 1fr); } }
 </style>
 <script>
   // 诊断: 收集页面错误供自动化测试检查
@@ -165,7 +201,7 @@
 
 <div id="hdr" class="panel">
   <h1>🏃 双足短跑大赛</h1>
-  <div class="sub">6 物种官方模型+官方策略 · MUJOCO 3.14 WASM</div>
+  <div class="sub" id="hdr-sub">6 物种官方模型+官方策略 · MUJOCO 3.14 WASM</div>
 </div>
 
 <div id="statusbar" class="panel">
@@ -193,21 +229,9 @@
     </div>
   </div>
   <div class="cell">
-    <span class="lbl">机器人数</span>
-    <div class="seg" id="count-seg">
-      <button data-n="2">2</button>
-      <button data-n="3">3</button>
-      <button data-n="4">4</button>
-      <button data-n="5">5</button>
-      <button data-n="6" class="active">6</button>
-    </div>
-  </div>
-  <div class="cell">
     <span class="lbl">阵容</span>
-    <div class="seg" id="lineup-seg">
-      <button data-v="mixed" class="active">六强混战</button>
-      <button data-v="g1">全 G1</button>
-      <button data-v="random">随机</button>
+    <div class="seg">
+      <button id="btn-lineup" title="回选择屏勾选出战物种, 可换阵容再赛">换将…</button>
     </div>
   </div>
   <div class="cell">
@@ -229,8 +253,8 @@
     <span class="lbl">视角</span>
     <div class="seg" id="cam-seg">
       <button data-m="leader">跟随领跑</button>
-      <button data-m="over" class="active">全景</button>
-      <button data-m="free">自由</button>
+      <button data-m="over">全景</button>
+      <button data-m="free" class="active">自由</button>
     </div>
   </div>
   <div class="cell">
@@ -245,7 +269,7 @@
 </div>
 
 <div id="hint">
-  <b>25m</b> 跑道 · 每次摔倒罚时 <b>2s</b> · 空格键重新发枪<br>
+  <b>25m</b> 跑道 · 每次摔倒罚时 <b>2s</b> · 空格键重新发枪 · 阵容可在选择屏调整<br>
   <b>R</b> 键开始/停止录制(停止自动下载; 控制条可勾选是否含面板) · 「自由」视角下可拖拽旋转 / 滚轮缩放
 </div>
 
@@ -258,7 +282,22 @@
     </table>
     <div class="btns">
       <button id="res-close">关闭</button>
+      <button id="btn-relineup" title="回选择屏调整出战物种, 已加载的物种零等待复用">换阵容</button>
       <button id="btn-again" class="primary">再来一局</button>
+    </div>
+  </div>
+</div>
+
+<div id="select">
+  <div class="card">
+    <h2>🤖 选择出战物种</h2>
+    <div id="sel-count">已选 0/6</div>
+    <div id="sel-grid"></div>
+    <div id="sel-foot">
+      <span class="spacer">点「开始比赛」后才加载所选物种的模型与策略</span>
+      <button id="sel-none">清空</button>
+      <button id="sel-all">全选</button>
+      <button id="sel-start" class="primary">开始比赛 ▶</button>
     </div>
   </div>
 </div>
@@ -266,7 +305,7 @@
 <div id="boot">
   <div class="inner">
     <h1>🏃 双足短跑大赛</h1>
-    <div class="tag">MUJOCO WASM 物理 · 官方模型+官方策略 · 纯浏览器本地运行</div>
+    <div class="tag" id="boot-tag">MUJOCO WASM 物理 · 官方模型+官方策略 · 纯浏览器本地运行</div>
     <progress id="bootbar" value="0" max="100"></progress>
     <div id="bootlog"></div>
   </div>

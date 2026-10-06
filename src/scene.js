@@ -19,7 +19,9 @@ export const TRACK_X1 = 38;
 export const TEAM_COLORS = ['#ff4d4d', '#ffb400', '#37c871', '#3a9bff', '#c85bff', '#ff6fb0'];
 
 export const MAX_LANES = 6;
-export function laneY(i) { return (i - (MAX_LANES - 1) / 2) * LANE_WIDTH; }
+// 车道线/编号牌/机器人站位统一用 laneY(i)(缺省 6 道): 机号与道号一一对应,
+// 第 i 台永远站画好的第 i+1 号道, 与地面道号/起点编号牌一致
+export function laneY(i, n = MAX_LANES) { return (i - (n - 1) / 2) * LANE_WIDTH; }
 
 // ---------- 体育场竞赛跑道：尺寸与物理车道保持一致 ----------
 export function buildTrack(scene) {

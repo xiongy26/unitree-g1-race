@@ -247,6 +247,8 @@ export const SPECIES = [
     short: 'G1',
     emoji: '🤖',
     xmlFile: './assets/g1_29dof.xml',
+    // G1 网格在 assets/meshes/(其余物种在各自 assets/<id>/meshes/), 资产 fetch 按此解析
+    meshesDir: './assets/meshes/',
     policyFile: './assets/policy.onnx',
     contract: G1_CONTRACT,
     dt: 0.002,
@@ -257,6 +259,9 @@ export const SPECIES = [
     visGroups: [1],
     maxV: 1.55,
     noise: 0.025,
+    // 选择屏文案(纯展示, 不参与物理/策略)
+    blurb: 'Unitree 全尺寸人形, 29 自由度全能型选手',
+    sizeHint: '身高约 1.3m · 29 关节',
     // G1 资产为"机器人 MJCF", 需包一层比赛场景
     wrapScene: true,
   },
@@ -282,6 +287,8 @@ export const SPECIES = [
     maxV: 1.0,
     noise: 0.01,
     yawCap: 0.6,
+    blurb: '众擎紧凑型人形, 100Hz 高频细腻步态',
+    sizeHint: '身高约 1.4m · 23 关节',
     wrapScene: false,
     // 官方地面 friction 0.6, 训练时物理材质为 1.0 -> 对齐
     xmlPatches: [{ from: '../meshes/', to: 'pm01_meshes/' }, { from: 'friction="0.6"', to: 'friction="1"' }],
@@ -302,6 +309,8 @@ export const SPECIES = [
     visGroups: [1],
     maxV: 1.2,
     noise: 0.01,
+    blurb: 'Booster 高瘦型人形, 大步幅稳定冲刺',
+    sizeHint: '身高约 1.45m · 12 关节',
     // T1 策略的 yaw 跟踪迟缓且超调大, 默认外环增益会画 ~2s 周期的 S 形(±0.4m),
     // 实测降低航向增益后 6 组车道/种子最大偏差 0.25~0.35m(默认增益 0.33~0.58m)
     steer: makeSteer({ kpYaw: 1.5, kdYaw: 0.2 }),
@@ -330,6 +339,8 @@ export const SPECIES = [
     // (跟踪 ~1:1, 五物种中最快)。maxV=1.0 留 ±6% 抖动边际由回归测试把关。
     maxV: 1.0,
     noise: 0.01,
+    blurb: '天工全尺寸人形, 五物种中的速度担当',
+    sizeHint: '身高约 1.7m · 20 关节',
     wrapScene: false,
     // 官方 compiler meshdir="../meshes/" -> VFS 的 meshes/;
     // position 舵机补 forcerange(训练 effort_limit_sim)
@@ -361,6 +372,8 @@ export const SPECIES = [
     // (test-x1-tune: 硬增益 40.1s -> 软增益+cap0.06 35.9s, 偏差仅 0.19m, 护栏兜底)
     steer: makeSteer({ kpYaw: 0.15, kdYaw: 0.02 }),
     yawCap: 0.06,
+    blurb: '智元灵犀轻量人形, 摆臂小跑姿态',
+    sizeHint: '身高约 1.35m · 14 关节',
     wrapScene: false,
     // 官方 compiler meshdir + 手腕 4 关节 armature 数值稳定补丁(见 X1_CONTRACT 注)
     xmlPatches: x1Patches,
@@ -386,6 +399,8 @@ export const SPECIES = [
     maxV: 0.9,
     noise: 0.005,
     // 默认外环增益即可贴道(3 车道最大偏差 0.20~0.25m); 策略固有左偏漂移由外环修正
+    blurb: 'Pollen 迷你鸭式机器人, 短腿扑腾向前',
+    sizeHint: '身高约 0.12m · 14 关节',
     wrapScene: false,
     // 官方 compiler meshdir="assets"(网格在 assets/ 子目录) -> VFS 专属前缀
     xmlPatches: [{ from: 'meshdir="assets"', to: 'meshdir="duck_meshes"' }],
